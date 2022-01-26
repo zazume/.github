@@ -1,5 +1,3 @@
-Pull request description here...
-
 ## Pull request type
 
 <!-- Please do not submit updates to dependencies unless it fixes an issue. --> 
@@ -24,6 +22,10 @@ Please check the type of change your PR introduces:
 ## Screenshots
 
 (prefer animated gif, loom...)
+
+## 🚨 Pay attention to:
+
+- The migration file could break things...
 
 ## Checklist
 

@@ -5,7 +5,7 @@
 <!-- Please try to limit your pull request to one type, submit multiple pull requests if needed. --> 
 
 Please check the type of change your PR introduces:
-
+<!-- ignore-task-list-start -->
 - [ ] Bugfix
 - [ ] Feature
 - [ ] Code style update (formatting, renaming)
@@ -13,7 +13,7 @@ Please check the type of change your PR introduces:
 - [ ] Build related changes
 - [ ] Documentation content changes
 - [ ] Other (please describe):
-
+<!-- ignore-task-list-end -->
 ## Changes
 
 - Refactor of...
@@ -28,12 +28,12 @@ Please check the type of change your PR introduces:
 - The migration file could break things...
 
 ## Checklist
-
+<!-- ignore-task-list-start -->
 - [ ] tested locally
 - [ ] added new dependencies
 - [ ] updated the docs
 - [ ] added a test
-
+<!-- ignore-task-list-end -->
 ## Issue
 
 - [ZZM-XYZ](https://zazume.atlassian.net/browse/ZZM-XYZ)

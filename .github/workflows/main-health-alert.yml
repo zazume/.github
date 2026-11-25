@@ -1,0 +1,106 @@
+name: main-health-alert
+
+# Reusable workflow: posts a Slack alert when a `push` run on `main` fails,
+# and a recovery message when the next run of the same workflow succeeds.
+# Callers trigger it with `on: workflow_run` (types: [completed]).
+# See README.md for usage.
+
+on:
+  workflow_call:
+    inputs:
+      slack-channel:
+        description: Slack channel (name or ID) where alerts are posted, e.g. '#alerts-critical'.
+        required: true
+        type: string
+    secrets:
+      slack-bot-token:
+        description: Slack bot token with chat:write. If missing, the alert is logged and skipped.
+        required: false
+
+jobs:
+  alert:
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      (github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Notify main status in Slack
+        # Never turn the caller red: any problem is logged and the job stays green.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SLACK_BOT_TOKEN: ${{ secrets.slack-bot-token }}
+          SLACK_CHANNEL: ${{ inputs.slack-channel }}
+          REPO: ${{ github.repository }}
+          SERVER_URL: ${{ github.server_url }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          RUN_CREATED_AT: ${{ github.event.workflow_run.created_at }}
+          WORKFLOW_ID: ${{ github.event.workflow_run.workflow_id }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          COMMIT_AUTHOR: ${{ github.event.workflow_run.head_commit.author.name }}
+        run: |
+          set -uo pipefail
+
+          # Conclusion of the previous run of this workflow on main (success|failure|none).
+          previous_conclusion() {
+            local prev=""
+            if [ "${RUN_ATTEMPT:-1}" -gt 1 ]; then
+              # Re-run: compare with the previous attempt of the same run.
+              prev=$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/attempts/$((RUN_ATTEMPT - 1))" --jq '.conclusion' 2>/dev/null) || prev=""
+            fi
+            if [ "$prev" != "success" ] && [ "$prev" != "failure" ]; then
+              prev=$(gh api "repos/${REPO}/actions/workflows/${WORKFLOW_ID}/runs?branch=main&event=push&status=completed&per_page=30" \
+                --jq "[.workflow_runs[]
+                        | select(.id != ${RUN_ID} and .created_at < \"${RUN_CREATED_AT}\")
+                        | select(.conclusion == \"success\" or .conclusion == \"failure\")]
+                      | sort_by(.created_at) | last | .conclusion // \"none\"") || return 1
+            fi
+            echo "$prev"
+          }
+
+          if ! PREVIOUS=$(previous_conclusion); then
+            echo "::warning::Could not read the previous run of '${WORKFLOW_NAME}'. Skipping Slack notification."
+            exit 0
+          fi
+          echo "Current: ${CONCLUSION}. Previous: ${PREVIOUS}."
+
+          REPO_NAME="${REPO#*/}"
+          COMMIT_URL="${SERVER_URL}/${REPO}/commit/${HEAD_SHA}"
+          if [ "$CONCLUSION" = "failure" ] && [ "$PREVIOUS" != "failure" ]; then
+            TITLE="🔴 main roto en ${REPO_NAME}"
+          elif [ "$CONCLUSION" = "success" ] && [ "$PREVIOUS" = "failure" ]; then
+            TITLE="🟢 main vuelve a verde en ${REPO_NAME}"
+          else
+            echo "No status change on main. Nothing to notify."
+            exit 0
+          fi
+
+          TEXT="*${TITLE}*"$'\n'"• Workflow: ${WORKFLOW_NAME}"$'\n'"• Commit: <${COMMIT_URL}|${HEAD_SHA:0:7}>"$'\n'"• Autor: ${COMMIT_AUTHOR:-desconocido}"$'\n'"• Run: <${RUN_URL}|ver run>"
+          echo "$TEXT"
+
+          if [ -z "${SLACK_BOT_TOKEN:-}" ]; then
+            echo "::warning::slack-bot-token secret is not set. Slack notification skipped."
+            exit 0
+          fi
+
+          PAYLOAD=$(jq -nc --arg channel "$SLACK_CHANNEL" --arg text "$TEXT" \
+            '{channel: $channel, text: $text, unfurl_links: false, unfurl_media: false}')
+          if ! RESPONSE=$(curl -sS --max-time 20 -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+            -H 'Content-type: application/json; charset=utf-8' \
+            --data "$PAYLOAD"); then
+            echo "::warning::Slack request failed. Notification not sent."
+            exit 0
+          fi
+          if [ "$(echo "$RESPONSE" | jq -r '.ok' 2>/dev/null)" != "true" ]; then
+            echo "::warning::Slack API error: $(echo "$RESPONSE" | jq -r '.error // "unknown"' 2>/dev/null)"
+            exit 0
+          fi
+          echo "Slack notification sent to ${SLACK_CHANNEL}."
